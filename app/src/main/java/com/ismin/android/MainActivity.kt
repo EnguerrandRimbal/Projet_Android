@@ -1,73 +1,104 @@
 package com.ismin.android
 
+import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
-import android.view.View
-import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import com.google.android.material.floatingactionbutton.FloatingActionButton
+import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.GoogleMap
+import com.google.android.gms.maps.MapView
+import com.google.android.gms.maps.OnMapReadyCallback
+import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.MarkerOptions
 import retrofit2.Call
 import retrofit2.Callback
 import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 
-const val SERVER_BASE_URL = "https://bookshelf-gme.cleverapps.io"
+const val SERVER_BASE_URL = "https://api.npoint.io"
+const val TAG = "MainActivity"
 
-class MainActivity : AppCompatActivity(), BookCreator {
+class MainActivity : AppCompatActivity(), OnMapReadyCallback {
 
-    private val bookshelf = Bookshelf()
-
+    private lateinit var mapView: MapView
+    private lateinit var googleMap: GoogleMap
     private val retrofit = Retrofit.Builder().addConverterFactory(GsonConverterFactory.create())
         .baseUrl(SERVER_BASE_URL).build()
-    private val bookService = retrofit.create(BookService::class.java)
-
-
-    private val btnCreateBook: FloatingActionButton by lazy {
-        findViewById(R.id.a_main_btn_create_book)
-    }
+    private val remarkablePlaceService = retrofit.create(RemarkablePlaceService::class.java)
+    private lateinit var places: List<RemarkablePlace>
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.d(TAG, "onCreate called")
         setContentView(R.layout.activity_main)
 
-        bookService.getAllBooks().enqueue(object : Callback<List<Book>> {
-            override fun onResponse(
-                call: Call<List<Book>>, response: Response<List<Book>>
-            ) {
-                val allBooks: List<Book>? = response.body()
-                allBooks?.forEach { bookshelf.addBook(it) }
-                displayBookListFragment()
+        mapView = findViewById(R.id.mapView)
+        mapView.onCreate(savedInstanceState)
+        mapView.getMapAsync(this)
+    }
+
+    override fun onMapReady(map: GoogleMap) {
+        Log.d(TAG, "onMapReady called")
+        googleMap = map
+        val grenoble = LatLng(45.188529, 5.724524)
+        googleMap.moveCamera(CameraUpdateFactory.newLatLngZoom(grenoble, 12f))
+
+        remarkablePlaceService.getRemarkablePlaces().enqueue(object : Callback<List<RemarkablePlace>> {
+            override fun onResponse(call: Call<List<RemarkablePlace>>, response: Response<List<RemarkablePlace>>) {
+                Log.d(TAG, "API call successful")
+                places = response.body() ?: emptyList()
+                if (places.isNotEmpty()) {
+                    Log.d(TAG, "Number of places received: ${places.size}")
+                    places.forEach { place ->
+                        Log.d(TAG, "Place received: $place")
+                        val position = LatLng(place.coordinates[1], place.coordinates[0])
+                        googleMap.addMarker(MarkerOptions().position(position).title(place.properties.libelle))
+                    }
+                } else {
+                    Log.d(TAG, "No places received")
+                }
             }
 
-            override fun onFailure(call: Call<List<Book>>, t: Throwable) {
-                Toast.makeText(baseContext, "Something wrong happened", Toast.LENGTH_SHORT).show()
+            override fun onFailure(call: Call<List<RemarkablePlace>>, t: Throwable) {
+                Log.e(TAG, "API call failed", t)
             }
         })
 
-
-        btnCreateBook.setOnClickListener {
-            displayCreateBookFragment()
+        googleMap.setOnMarkerClickListener { marker ->
+            Log.d(TAG, "Marker clicked: ${marker.title}")
+            val place = places.find { it.properties.libelle == marker.title }
+            if (place != null) {
+                val intent = Intent(this, RemarkablePlaceDetailActivity::class.java)
+                intent.putExtra("place", place)
+                startActivity(intent)
+            }
+            true
         }
     }
 
-    private fun displayBookListFragment() {
-        val fragmentTransaction = supportFragmentManager.beginTransaction()
-        val bookListFragment = BookListFragment.newInstance(bookshelf.getAllBooks())
-        fragmentTransaction.replace(R.id.a_main_lyt_container, bookListFragment)
-        fragmentTransaction.commit()
-        btnCreateBook.visibility = View.VISIBLE
+    override fun onResume() {
+        super.onResume()
+        mapView.onResume()
     }
 
-    private fun displayCreateBookFragment() {
-        val fragmentTransaction = supportFragmentManager.beginTransaction()
-        val createBookFragment = CreateBookFragment()
-        fragmentTransaction.replace(R.id.a_main_lyt_container, createBookFragment)
-        fragmentTransaction.commit()
-        btnCreateBook.visibility = View.GONE
+    override fun onPause() {
+        super.onPause()
+        mapView.onPause()
     }
-    
+
+    override fun onDestroy() {
+        super.onDestroy()
+        mapView.onDestroy()
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        mapView.onLowMemory()
+    }
+
     override fun onCreateOptionsMenu(menu: Menu?): Boolean {
         menuInflater.inflate(R.menu.menu_main, menu)
         return super.onCreateOptionsMenu(menu)
@@ -75,27 +106,12 @@ class MainActivity : AppCompatActivity(), BookCreator {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
-            R.id.action_delete -> {
-                bookshelf.clear()
-                displayBookListFragment()
+            R.id.action_about -> {
+                val intent = Intent(this, AboutActivity::class.java)
+                startActivity(intent)
                 true
             }
-
             else -> super.onOptionsItemSelected(item)
         }
-    }
-
-    override fun onBookCreated(book: Book) {
-        bookService.createBook(book)
-            .enqueue {
-                onResponse = {
-                    val bookFromServer: Book? = it.body()
-                    bookshelf.addBook(bookFromServer!!)
-                    displayBookListFragment()
-                }
-                onFailure = {
-                    Toast.makeText(this@MainActivity, it?.message, Toast.LENGTH_SHORT).show()
-                }
-            }
     }
 }
